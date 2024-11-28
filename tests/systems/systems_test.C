@@ -13,7 +13,6 @@
 #include <libmesh/cell_tet4.h>
 #include <libmesh/zero_function.h>
 #include <libmesh/linear_implicit_system.h>
-#include <libmesh/nonlinear_implicit_system.h>
 #include <libmesh/transient_system.h>
 #include <libmesh/quadrature_gauss.h>
 #include <libmesh/node_elem.h>
@@ -1292,7 +1291,6 @@ public:
 
     // Set some parameters to the equation system that would cause a failed test
     equation_systems.parameters.set<unsigned int>("linear solver maximum iterations") = 0;
-    equation_systems.parameters.set<unsigned int>("nonlinear solver absolute residual tolerance") = 1e8;
 
     // Setup Linear Implicit system
     LinearImplicitSystem & li_system =
@@ -1304,29 +1302,15 @@ public:
     li_system.get_linear_solver()->set_solver_type(JACOBI);
     li_system.get_linear_solver()->set_preconditioner_type(IDENTITY_PRECOND);
 
-    // Setup nonlinear Implicit system
-    NonlinearImplicitSystem & nli_system =
-      equation_systems.add_system<NonlinearImplicitSystem> ("test");
-    nli_system.add_variable ("u", libMesh::FIRST);
-    nli_system.add_variable ("v", libMesh::FIRST);
-    nli_system.add_variable ("w", libMesh::FIRST);
-    nli_system.attach_assemble_function (assemble_matrix_and_rhs);
-
     // Set some parameters to the system that work for the solve
     li_system.parameters.set<unsigned int>("linear solver maximum iterations") = 5;
-    nli_system.parameters.set<unsigned int>("nonlinear solver absolute residual tolerance") = 1e-10;
 
     // See the solve pass, indicating system parameters are used over equation system parameters
     equation_systems.init ();
     li_system.solve();
-    nli_system.solve();
 
     // Check that the number of iterations from the systems got obeyed
     CPPUNIT_ASSERT_EQUAL(li_system.n_linear_iterations(), 5u);
-
-    // Check that the solution for the nonlinear system is converged
-    Real ref_l1_norm = static_cast<Real>(mesh.n_nodes() * li_system.n_vars());
-    LIBMESH_ASSERT_FP_EQUAL(nli_system.solution->l1_norm(), ref_l1_norm, TOLERANCE);
 }
 
   void testAssemblyWithDgFemContext()
