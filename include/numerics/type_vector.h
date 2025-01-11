@@ -627,18 +627,18 @@ inline
 void TypeVector<T>::add_scaled (const TypeVector<T2> & p, const T & factor)
 {
 #if LIBMESH_DIM == 1
-  _coords[0] += factor*p(0);
+  _coords[0] += factor*p._coords[0];
 #endif
 
 #if LIBMESH_DIM == 2
-  _coords[0] += factor*p(0);
-  _coords[1] += factor*p(1);
+  _coords[0] += factor*p._coords[0];
+  _coords[1] += factor*p._coords[1];
 #endif
 
 #if LIBMESH_DIM == 3
-  _coords[0] += factor*p(0);
-  _coords[1] += factor*p(1);
-  _coords[2] += factor*p(2);
+  _coords[0] += factor*p._coords[0];
+  _coords[1] += factor*p._coords[1];
+  _coords[2] += factor*p._coords[2];
 #endif
 
 }
@@ -701,7 +701,7 @@ inline
 void TypeVector<T>::subtract_scaled (const TypeVector<T2> & p, const T & factor)
 {
   for (unsigned int i=0; i<LIBMESH_DIM; i++)
-    _coords[i] -= factor*p(i);
+    _coords[i] -= factor*p._coords[i];
 }
 
 
@@ -859,9 +859,9 @@ TypeVector<T>::operator * (const TypeVector<T2> & p) const
 #endif
 
 #if LIBMESH_DIM == 3
-  return (_coords[0]*p(0) +
-          _coords[1]*p(1) +
-          _coords[2]*p(2));
+  return (_coords[0]*p._coords[0] +
+          _coords[1]*p._coords[0] +
+          _coords[2]*p._coords[2]);
 #endif
 }
 
