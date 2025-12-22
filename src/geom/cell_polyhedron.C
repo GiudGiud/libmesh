@@ -116,14 +116,23 @@ Polyhedron::Polyhedron (const std::vector<std::shared_ptr<Polygon>> & sides,
         const Polygon & side = *sides[s];
         const Point x_i = side.point(0);
         const Point n_i =
-          (side.point(1) - side.point(0)).cross
+          -(side.point(1) - side.point(0)).cross
           (side.point(0) - side.point(side.n_sides()-1)).unit();
 
+        // Get the center of the side
+        Point center_side;
+        const auto n_side_nodes = side.n_nodes();
+        for (auto n : make_range(n_side_nodes))
+          center_side.add (side.point(n));
+        center_side /= static_cast<Real>(n_side_nodes);
+
         bool & inward_normal = std::get<1>(_sidelinks_data[s]);
-        inward_normal = (n_i * (center - x_i) > TOLERANCE);
+        inward_normal = (n_i * (center - center_side) > TOLERANCE);
+        std::cout << "Inward ? " << inward_normal << " " << n_i << " " << x_i << " " << center << std::endl;
+        std::cout << "Previous choice " << (n_i * (center - x_i) > TOLERANCE) << std::endl;
       }
 
-    // We're betting a lot on "our polyhedra are all convex", so let's
+    // We're betting a lot on "our polygon sides are all convex", so let's
     // check that if we have time.
 #ifdef DEBUG
     for (unsigned int s : index_range(sides))
