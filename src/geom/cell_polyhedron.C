@@ -115,8 +115,9 @@ Polyhedron::Polyhedron (const std::vector<std::shared_ptr<Polygon>> & sides,
       {
         const Polygon & side = *sides[s];
         const Point x_i = side.point(0);
+        // opposite of normal
         const Point n_i =
-          -(side.point(1) - side.point(0)).cross
+          (side.point(1) - side.point(0)).cross
           (side.point(0) - side.point(side.n_sides()-1)).unit();
 
         // Get the center of the side
@@ -129,7 +130,6 @@ Polyhedron::Polyhedron (const std::vector<std::shared_ptr<Polygon>> & sides,
         bool & inward_normal = std::get<1>(_sidelinks_data[s]);
         inward_normal = (n_i * (center - center_side) > TOLERANCE);
         std::cout << "Inward ? " << inward_normal << " " << n_i << " " << x_i << " " << center << std::endl;
-        std::cout << "Previous choice " << (n_i * (center - x_i) > TOLERANCE) << std::endl;
       }
 
     // We're betting a lot on "our polygon sides are all convex", so let's

@@ -258,7 +258,7 @@ C0Polyhedron::side_vertex_average_normal(const unsigned int s) const
   {
     const Point next_edge = poly_side_ptr->point((i + 2) % n_side_edges) -
                             poly_side_ptr->point((i + 1) % n_side_edges);
-    const Point normal_at_vertex = current_edge.cross(next_edge);
+    const Point normal_at_vertex = -current_edge.cross(next_edge);
     normal += normal_at_vertex;
     // Note: the sides are planar, we don't need to test them all
     if (normal.norm_sq() > TOLERANCE)
@@ -292,9 +292,11 @@ void C0Polyhedron::retriangulate()
   for (unsigned int s : make_range(this->n_sides()))
     {
       const auto & [side, inward_normal, node_map] = this->_sidelinks_data[s];
+      std::cout << "Side " << s << " normal " << side_vertex_average_normal(s) << " inward " << inward_normal << std::endl;
 
       for (auto t : make_range(side->n_subtriangles()))
         {
+          std::cout << "Side subtriangle " << t << std::endl;
           Elem * tri = surface.add_elem(Elem::build(TRI3));
 
           const std::array<int, 3> subtri = side->subtriangle(t);
@@ -303,14 +305,19 @@ void C0Polyhedron::retriangulate()
             {
               const int side_id = subtri[i];
               const Node * poly_node = side->node_ptr(side_id);
+              std::cout << *(Point *)poly_node << std::endl;
 
               libmesh_assert_less(side_id, node_map.size());
               const unsigned int local_id = node_map[side_id];
 
               Node * surf_node = surface.query_node_ptr(local_id);
               if (surf_node)
+              {
                 libmesh_assert_equal_to(*(const Point*)poly_node,
                                         *(const Point*)surf_node);
+                // libmesh_assert_equal_to(poly_node->id(),
+                //                         surf_node->id());
+              }
               else
                 surf_node = surface.add_point(*poly_node, local_id);
 
@@ -319,9 +326,16 @@ void C0Polyhedron::retriangulate()
               const int tri_node = inward_normal ? i : 2-i;
               tri->set_node(tri_node, surf_node);
             }
+
+          // Check triangle normal
+          const auto n0 = tri->point(0);
+          const auto n1 = tri->point(1);
+          const auto n2 = tri->point(2);
+          std::cout << "Triangle normal " << ((n1 - n0).cross(n2 - n0)).unit() << std::endl;
         }
     }
-
+  std::cout << surface.n_nodes() << std::endl;
+  std::cout << surface.n_elem() << std::endl;
   surface.allow_renumbering(false);
   surface.prepare_for_use();
 
@@ -373,12 +387,13 @@ void C0Polyhedron::retriangulate()
   // sometimes with a similarly-sorted vector of surrounding elements
   // to go with it.
   auto surroundings_of =
-    [&nodes_to_elem_map, & surface]
+    [&nodes_to_elem_map, &surface]
     (const Node & node,
      std::vector<Elem *> * surrounding_elems)
     {
       const std::set<dof_id_type> & elems_by_node =
         nodes_to_elem_map[node.id()];
+      std::cout << "Elements per node (triangles) " << elems_by_node.size() << std::endl;
 
       const unsigned int n_surrounding = elems_by_node.size();
       libmesh_assert_greater_equal(n_surrounding, 3);
@@ -400,6 +415,13 @@ void C0Polyhedron::retriangulate()
           surrounding_nodes[i] = next_node;
           if (surrounding_elems)
             (*surrounding_elems)[i] = elem;
+
+          // Check normal of triangle
+          const auto n0 = *(Point *) (&node);
+          const auto n1 = *(Point *) next_node;
+          const auto n2 = *(Point *) elem->node_ptr((n+2)%3);
+          std::cout << "Surrounding triangle normal " << ((n1 - n0).cross(n2 - n0)).unit() << std::endl;
+
           elem = elem->neighbor_ptr((n+2)%3);
           libmesh_assert(elem);
           libmesh_assert_equal_to(elem, surface.elem_ptr(elem->id()));
@@ -439,8 +461,17 @@ void C0Polyhedron::retriangulate()
             v02 = static_cast<Point>(*surrounding_nodes[n+1]) - node,
             v03 = static_cast<Point>(*surrounding_nodes[n+2]) - node;
 
-          total_solid_angle += solid_angle(v01, v02, v03);
+          // Solid angles are all negative because the surface triangulation triangles were pointing
+          // outwards and the 4th node is inward because the polyhedron is convex
+          // Some are zero when all the nodes selected are from the same (planar) polygon
+          total_solid_angle += std::abs(solid_angle(v01, v02, v03));
+          // Make it positive to store smallest angle first
+          std::cout << "Solid angle " << solid_angle(v01, v02, v03) << std::endl;
+          // libmesh_assert(solid_angle(v01, v02, v03) > 0);
         }
+      std::cout << "Node " << node.id() << std::endl;
+      std::cout << "Surrounding nodes " << n_surrounding << std::endl;
+      std::cout << "Total solid angle for node: " << total_solid_angle << std::endl;
 
       return std::make_pair(n_surrounding, total_solid_angle);
     };
@@ -454,27 +485,52 @@ void C0Polyhedron::retriangulate()
   // Since C++11 multimap has guaranteed that pairs with matching keys
   // are kept in insertion order, so we can use Node * for values even
   // in parallel.
-  typedef std::multimap<std::pair<int, Real>, Node*> node_map_type;
+  // < -> ascending
+  // > -> descending
+  // Tried: ascending ascending -> falls into a 0 volume tet trap for lowest valence lowest angle
+  //        ascending descending -> same problem
+  //        descending ascending
+  //        descending descending -> seemed to go further but then not sure
+  struct Cmp {
+    bool operator()(const std::pair<int,Real>& a,
+                    const std::pair<int,Real>& b) const {
+        return a.first!=b.first ? a.first<b.first : a.second<b.second;
+    }
+  };
+  typedef std::multimap<std::pair<int, Real>, Node*, Cmp> node_map_type;
   node_map_type nodes_by_geometry;
+  // Keep track of index in map
   std::map<Node *, node_map_type::iterator> node_index;
 
+  // The map is first sorted by the valence
+  // then by the angle. Max angle, if they are negative (positive right now), first
   for (auto node : surface.node_ptr_range())
     node_index[node] =
       nodes_by_geometry.emplace(geometry_at(*node), node);
+
+  std::cout << std::endl << "DONE with sorting nodes: now creating tets" << std::endl;
+  for (auto [pair, nd] : nodes_by_geometry)
+    std::cout << "id " << nd->id() << " val " << pair.first << " " << pair.second << std::endl;
 
   // In 3D, this will require nested loops: an outer loop to remove
   // each vertex, and an inner loop to remove multiple tetrahedra in
   // cases where the vertex has more than 3 neighboring triangles.
 
+  // One of the checks does not work if we skip adding a 0 volume tet
+  bool has_skipped_adding_tets_and_retriangulating = false;
+
   // We'll be done when there are only three "unremoved" nodes left,
   // so they don't actually enclose any volume.
   for (auto i : make_range(nodes_by_geometry.size()-3))
     {
+      // TODO Switch up direction ?
       auto geometry_it = nodes_by_geometry.begin();
       auto geometry_key = geometry_it->first;
       auto [valence, angle] = geometry_key;
       Node * node = geometry_it->second;
       libmesh_ignore(i);
+      std::cout << std::endl;
+      std::cout << "\n\nConsidering " << *node << " valence " << valence << " angle " << angle << std::endl;
 
       // If our lowest-valence nodes are all points of non-convexity,
       // skip to a higher valence.
@@ -487,6 +543,7 @@ void C0Polyhedron::retriangulate()
 
           std::tie(geometry_key, node) = *geometry_it;
           std::tie(valence, angle) = geometry_key;
+          std::cout << "This is happening " << std::endl;
         }
 
       std::vector<Elem *> surrounding_elems;
@@ -500,15 +557,23 @@ void C0Polyhedron::retriangulate()
       // predecessor and successor nodes in order afterward.
       auto find_valid_nodes_around =
         [n_surrounding, & surrounding_nodes]
-        (unsigned int j)
+        (unsigned int j, unsigned int skip_node=1e6)
       {
         unsigned int jnext = (j+1)%n_surrounding;
-        while (!surrounding_nodes[jnext])
+        while (!surrounding_nodes[jnext] || jnext == skip_node)
+        {
+          // if (jnext == skip_node)
+          //   std::cout << "Skipping " << skip_node << std::endl;
           jnext = (jnext+1)%n_surrounding;
+        }
 
         unsigned int jprev = (j+n_surrounding-1)%n_surrounding;
-        while (!surrounding_nodes[jprev])
+        while (!surrounding_nodes[jprev] || jprev == skip_node)
+        {
+          // if (jprev == skip_node)
+          //   std::cout << "Skipping prev " << skip_node << std::endl;
           jprev = (jprev+n_surrounding-1)%n_surrounding;
+        }
 
         return std::make_pair(jprev, jnext);
       };
@@ -524,9 +589,55 @@ void C0Polyhedron::retriangulate()
       // search this vector.
       std::vector<Real> local_tet_quality(n_surrounding, 1);
 
+      // Vectors from the center node to each of its surrounding
+      // nodes are helpful for calculating prospective tet
+      // quality.
+      std::vector<Point> v0s(n_surrounding);
+      for (auto j : make_range(n_surrounding))
+        v0s[j] = *(Point *)surrounding_nodes[j] - *node;
+
+      // Find the tet quality we'd potentially get from each
+      // possible choice of tet
+      auto local_tet_quality_of =
+        [& surrounding_nodes, & v0s, & find_valid_nodes_around]
+        (unsigned int j, unsigned int skip_node=1e6)
+      {
+        // std::cout << "Computing tet quality" << std::endl;
+        auto [jminus, jplus] = find_valid_nodes_around(j, skip_node);
+
+        // Anything proportional to the ratio of volume to
+        // total-edge-length-cubed should peak for perfect tets
+        // but hit 0 for pancakes and slivers.
+
+        const Real total_len =
+          v0s[j].norm() + v0s[jminus].norm() + v0s[jplus].norm() +
+          (*(Point *)surrounding_nodes[jplus] -
+            *(Point *)surrounding_nodes[j]).norm() +
+          (*(Point *)surrounding_nodes[j] -
+            *(Point *)surrounding_nodes[jminus]).norm() +
+          (*(Point *)surrounding_nodes[jminus] -
+            *(Point *)surrounding_nodes[jplus]).norm();
+
+        // Orientation here is tricky.  Think of the triple
+        // product as (v1 cross v2) dot v3, with right hand rule.
+        const Real six_vol =
+          triple_product(v0s[jminus], v0s[jplus], v0s[j]);
+
+        return six_vol / (total_len * total_len * total_len);
+      };
+
+      // Get the quality of the tets for every node around the node:
+      // we have chosen 1 node. If we chose another node for the tet, there
+      // are only two other nodes that are also neighbors, hence 1 tet per node
+      // Note: we always need to know the quality, because as we delete vertices
+      // we could end up with a a node with 3 surrounding nodes, but all coplanar!
+      for (auto j : make_range(n_surrounding))
+        local_tet_quality[j] = local_tet_quality_of(j);
+
       // From our center node with N surrounding nodes we can make N-2
-      // tetrahedra.  The first N-3 each replace two surface tets with
-      // two new surface tets.
+      // tetrahedra.
+      // For the first N-3 tets we build, we may have to replace two surface
+      // triangles with two new surface triangles.
       //
       // My first idea was to greedily pick nodes with the smallest
       // local (solid) angles to get the best quality.  This works in
@@ -541,23 +652,57 @@ void C0Polyhedron::retriangulate()
       // and creating those neighbors so as to change them.
 
       auto find_new_tet_nodes =
-        [& local_tet_quality, & find_valid_nodes_around]
+        [& local_tet_quality, & local_tet_quality_of, & find_valid_nodes_around, & node, & v0s, & surrounding_nodes]
         ()
       {
+        std::cout << "Looking for tet nodes " << std::endl;
         unsigned int jbest = 0;
         auto [jminus, jplus] = find_valid_nodes_around(jbest);
         Real qneighbest = std::min(local_tet_quality[jminus],
                                    local_tet_quality[jplus]);
+        std::cout << "Starting choice " << jminus << " " << jplus << ": current q " << local_tet_quality[0] << " worst neighbor " << qneighbest << std::endl;
+        std::cout << "Neighbors post this choice " << local_tet_quality_of(jminus, 0) << " " << local_tet_quality_of(jplus, 0) << std::endl;
+
+        auto num_bad_neigh_best = (local_tet_quality[jminus] <= 0) + (local_tet_quality[jplus] <= 0);
+
+        // Count the number of valid surrounding nodes
+        unsigned int n_valid_surrounding = 0;
+        for (const auto surr_node : surrounding_nodes)
+          if (surr_node)
+            n_valid_surrounding++;
+
+        // Expected qualities post removing jbest from the surrounding nodes
+        bool reject_current = false;
+        Real post_jminus = local_tet_quality_of(jminus, 0);
+        Real post_jplus = local_tet_quality_of(jplus, 0);
+        if (post_jminus <= 0 && post_jplus <= 0 && n_valid_surrounding > 3)
+          reject_current = true;
         for (auto j : make_range(std::size_t(1),
                                  local_tet_quality.size()))
           {
+            std::cout << "Looking at tet " << j << " : " << local_tet_quality[j] << std::endl;
             // We don't want to build a bad tet
-            if (local_tet_quality[j] <= 0)
+            if (local_tet_quality[j] <= 0 || local_tet_quality[j] == -1e6)
               continue;
+            // Try flipping it!
+            // bool flipped = false;
+            // if (local_tet_quality[j] < 0 && local_tet_quality[j] != -1e6)
+            // {
+            //   std::cout << "Trying to flip " << std::endl;
+            //   flipped = true;
+            // }
 
             std::tie(jminus, jplus) = find_valid_nodes_around(j);
             Real qneighj = std::min(local_tet_quality[jminus],
                                     local_tet_quality[jplus]);
+            // if (flipped)
+            // {
+            //   const auto temp = jminus;
+            //   jminus = jplus;
+            //   jplus = temp;
+            // }
+            std::cout << "Neighbors post this choice " << local_tet_quality_of(jminus, j)
+                      << " " << local_tet_quality_of(jplus, j) << std::endl;
 
             // We don't want to build a tet that can't fix a neighbor
             // if we can build one that can.
@@ -565,20 +710,70 @@ void C0Polyhedron::retriangulate()
                 qneighj > 0)
               continue;
 
-            // We want to try for the best possible fix.
-            if ((local_tet_quality[j] - qneighj) >
-                (local_tet_quality[jbest] - qneighj))
-              {
+            // Avoid chosing a tet that when constructed would leave both neighbors in bad shape
+            // TODO: simply pre-compute that for every vertex and exclude those nodes
+            // TODO: It does not matter if we are down to 4 surrounding (?)
+            if (local_tet_quality_of(jminus, /*without*/j) <= 0 &&
+                local_tet_quality_of(jplus, /*without*/j) <= 0)
+              continue;
+
+            // The more neighbors we fix the better
+            auto num_bad_neigh = (local_tet_quality[jminus] <= 0) + (local_tet_quality[jplus] <= 0);
+            if (num_bad_neigh > num_bad_neigh_best)
+            {
+                std::cout << "Switching choice due to more fixes from " << jbest << " to " << j << std::endl;
                 jbest = j;
                 qneighbest = qneighj;
+                num_bad_neigh_best = num_bad_neigh;
+                // We already checked the qualities after
+                reject_current = false;
+            }
+
+            // Prefer high valence over low valence
+            // TODO
+
+            // We want to try for the best possible fix.
+            if (((local_tet_quality[j] - qneighj) >
+                 (local_tet_quality[jbest] - qneighj)) || reject_current)
+              {
+                std::cout << "Switching choice due to higher quality delta from " << jbest << " to " << j << std::endl;
+                jbest = j;
+                qneighbest = qneighj;
+                num_bad_neigh_best = num_bad_neigh;
+                // We already checked the qualities after
+                reject_current = false;
               }
           }
 
-        libmesh_error_msg_if
-          (local_tet_quality[jbest] <= 0,
-           "Cannot build non-singular non-inverted tet");
+        if (local_tet_quality[jbest] <= 0)
+        {
+          std::cout << std::endl;
+          std::cout << "Head node " << *node << std::endl;
+          // Output all the nodes left
+          for (auto j : make_range(std::size_t(0),
+                                   local_tet_quality.size()))
+            if (local_tet_quality[j] != -1e6)
+            {
+              std::tie(jminus, jplus) = find_valid_nodes_around(j);
+              std::cout << *(Point*) surrounding_nodes[jminus] << std::endl;
+              std::cout << *(Point*) surrounding_nodes[j] << std::endl;
+              std::cout << *(Point*) surrounding_nodes[jplus] << std::endl;
+              std::cout << v0s[jminus] << " " << v0s[j] << " " << v0s[jplus] << std::endl;
+              std::cout << triple_product(v0s[jminus], v0s[jplus], v0s[j]) << std::endl;
+            }
+
+          // Output the potential tests
+        }
+
+        // We'll catch this downstream
+        // libmesh_error_msg_if
+        //   (local_tet_quality[jbest] <= 0,
+        //    "Cannot build non-singular non-inverted tet");
 
         std::tie(jminus, jplus) = find_valid_nodes_around(jbest);
+        std::cout << "Picked " << jbest << " quality "
+                  << local_tet_quality[jbest] << " neighbors "
+                  << local_tet_quality[jplus] << " " << local_tet_quality[jminus] << std::endl;
 
         return std::make_tuple(jbest, jminus, jplus);
       };
@@ -590,53 +785,47 @@ void C0Polyhedron::retriangulate()
           // don't want to get one.
           constexpr Real far_node = -1e6;
 
-          // Vectors from the center node to each of its surrounding
-          // nodes are helpful for calculating prospective tet
-          // quality.
-          std::vector<Point> v0s(n_surrounding);
-          for (auto j : make_range(n_surrounding))
-            v0s[j] = *(Point *)surrounding_nodes[j] - *node;
-
-          // Find the tet quality we'd potentially get from each
-          // possible choice of tet
-          auto local_tet_quality_of =
-            [& surrounding_nodes, & v0s, & find_valid_nodes_around]
-            (unsigned int j)
-          {
-            auto [jminus, jplus] = find_valid_nodes_around(j);
-
-            // Anything proportional to the ratio of volume to
-            // total-edge-length-cubed should peak for perfect tets
-            // but hit 0 for pancakes and slivers.
-
-            const Real total_len =
-              v0s[j].norm() + v0s[jminus].norm() + v0s[jplus].norm() +
-              (*(Point *)surrounding_nodes[jplus] -
-               *(Point *)surrounding_nodes[j]).norm() +
-              (*(Point *)surrounding_nodes[j] -
-               *(Point *)surrounding_nodes[jminus]).norm() +
-              (*(Point *)surrounding_nodes[jminus] -
-               *(Point *)surrounding_nodes[jplus]).norm();
-
-            // Orientation here is tricky.  Think of the triple
-            // product as (v1 cross v2) dot v3, with right hand rule.
-            const Real six_vol =
-              triple_product(v0s[jminus], v0s[jplus], v0s[j]);
-
-            return six_vol / (total_len * total_len * total_len);
-          };
-
-          for (auto j : make_range(n_surrounding))
-            local_tet_quality[j] = local_tet_quality_of(j);
-
-          // If we have N surrounding nodes, we can make N tets and
+          // If we have N surrounding nodes, we can make N-3 tets and
           // that'll bring us back to the 3-surrounding-node case to
           // finish.
           for (auto t : make_range(n_surrounding-3))
             {
               libmesh_ignore(t);
-
+              std::cout << "Going down to 3 surrounding: " << t << std::endl;
+              
               auto [jbest, jminus, jplus] = find_new_tet_nodes();
+
+              // If all zero volume, skip, we have covered all we need for this node
+              if (local_tet_quality[jbest] <= 0)
+              {
+                std::cout << "\n\nSkipping tet " << jbest << std::endl;
+
+                // The solid angle for the far node should now stay
+                // unchanged until we're out of this inner loop; let's
+                // recalculate it here, and then we'll be done with it.
+                Node * & nbestref = surrounding_nodes[jbest];
+                nodes_by_geometry.erase(node_index[nbestref]);
+                std::cout << std::endl << "accepted a tet! Deleting" << std::endl;
+                node_index[nbestref] =
+                  nodes_by_geometry.emplace(geometry_at(*nbestref), nbestref);
+
+                // The far node is no longer sharing an edge with our center
+                // node.  Make sure we don't use it again with the center
+                // node.
+                local_tet_quality[jbest] = far_node;
+                nbestref = nullptr;
+
+                // The potential tet qualities using the side nodes have
+                // changed now that they're directly connected to each
+                // other.
+                local_tet_quality[jminus] =
+                  local_tet_quality_of(jminus);
+
+                local_tet_quality[jplus] =
+                  local_tet_quality_of(jplus);
+                std::cout << "New qualities: " << local_tet_quality[jminus] << " " << local_tet_quality[jplus] << std::endl;
+                continue;
+              }
 
               // Turn these four nodes into a tet
               Node * nbest  = surrounding_nodes[jbest],
@@ -697,7 +886,10 @@ void C0Polyhedron::retriangulate()
               // unchanged until we're out of this inner loop; let's
               // recalculate it here, and then we'll be done with it.
               Node * & nbestref = surrounding_nodes[jbest];
+              if (nbestref == nullptr)
+                std::cout << "Accessing null" << std::endl;
               nodes_by_geometry.erase(node_index[nbestref]);
+              std::cout << std::endl << "accepted a tet! Deleting" << std::endl;
               node_index[nbestref] =
                 nodes_by_geometry.emplace(geometry_at(*nbestref), nbestref);
 
@@ -715,14 +907,33 @@ void C0Polyhedron::retriangulate()
 
               local_tet_quality[jplus] =
                 local_tet_quality_of(jplus);
+              std::cout << "New qualities: " << local_tet_quality[jminus] << " " << local_tet_quality[jplus] << std::endl;
             }
         }
+
+      std::cout << "\nDown to 3 surrounding nodes!!" << std::endl;
 
       // Now we should have just 3 surrounding nodes, with which to
       // make one tetrahedron.  Put them in a counterclockwise
       // (looking from outside) orientation, not the "best, clockwise,
       // counterclockwise" we get from the lambda.
       auto [j2, j1, j3] = find_new_tet_nodes();
+
+      // If all zero volume, skip, we have covered all we need for this node
+      if (local_tet_quality[j2] <= 0)
+      {
+        std::cout << "Skipping adding final tet " << j2 << std::endl;
+        nodes_by_geometry.erase(geometry_it);
+        has_skipped_adding_tets_and_retriangulating = true;
+
+        // Elem * oldtri1 = surrounding_elems[j1],
+        //     * oldtri2 = surrounding_elems[j2],
+        //     * oldtri3 = surrounding_elems[j3];
+        // surface.delete_elem(oldtri1);
+        // surface.delete_elem(oldtri2);
+        // surface.delete_elem(oldtri3);
+        continue;
+      }
 
       // Turn these last four nodes into a tet
       Node * n1 = surrounding_nodes[j1],
@@ -767,6 +978,23 @@ void C0Polyhedron::retriangulate()
       surface.delete_elem(oldtri2);
       surface.delete_elem(oldtri3);
 
+      // We've used up our center node, so it's not something we can
+      // eliminate again.
+      nodes_by_geometry.erase(geometry_it);
+
+      // Recompute the valence and angles of the nodes we used
+      // The idea is that if one node is being isolated on one side,
+      // we need to treat it asap
+      Node * & node_j2 = surrounding_nodes[j2];
+      nodes_by_geometry.erase(node_index[node_j2]);
+      node_index[node_j2] = nodes_by_geometry.emplace(geometry_at(*node_j2), node_j2);
+      Node * & node_j1 = surrounding_nodes[j1];
+      nodes_by_geometry.erase(node_index[node_j1]);
+      node_index[node_j1] = nodes_by_geometry.emplace(geometry_at(*node_j1), node_j1);
+      Node * & node_j3 = surrounding_nodes[j3];
+      nodes_by_geometry.erase(node_index[node_j3]);
+      node_index[node_j3] = nodes_by_geometry.emplace(geometry_at(*node_j3), node_j3);
+
       // We should have used up all our surrounding nodes now, and we
       // shouldn't have messed up our surface in the process, and our
       // center node should no longer be part of the surface.
@@ -786,14 +1014,11 @@ void C0Polyhedron::retriangulate()
           libmesh_assert_not_equal_to
             (elem->node_ptr(p), node);
 #endif
-
-      // We've used up our center node, so it's not something we can
-      // eliminate again.
-      nodes_by_geometry.erase(geometry_it);
     }
 
   // At this point our surface should just have two triangles left.
-  libmesh_assert_equal_to(surface.n_elem(), 2);
+  if (!has_skipped_adding_tets_and_retriangulating)
+    libmesh_assert_equal_to(surface.n_elem(), 2);
 }
 
 
@@ -802,7 +1027,6 @@ void C0Polyhedron::add_tet(int n1,
                            int n3,
                            int n4)
 {
-#ifndef NDEBUG
   const auto nn = this->n_nodes();
   libmesh_assert_less(n1, nn);
   libmesh_assert_less(n2, nn);
@@ -813,10 +1037,13 @@ void C0Polyhedron::add_tet(int n1,
   const Point v13 = this->point(n3) - this->point(n1);
   const Point v14 = this->point(n4) - this->point(n1);
   const Real six_vol = triple_product(v12, v13, v14);
-  libmesh_assert_greater(six_vol, Real(0));
-#endif
-
-  this->_triangulation.push_back({n1, n2, n3, n4});
+  // libmesh_assert_greater(six_vol, Real(0));
+  if (six_vol > 0)
+    this->_triangulation.push_back({n1, n2, n3, n4});
+  else if (six_vol < 0)
+    this->_triangulation.push_back({n1, n3, n2, n4});
+  else
+    libmesh_error_msg("Volume should not be 0");
 }
 
 
