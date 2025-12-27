@@ -494,7 +494,7 @@ void C0Polyhedron::retriangulate()
   struct Cmp {
     bool operator()(const std::pair<int,Real>& a,
                     const std::pair<int,Real>& b) const {
-        return a.first!=b.first ? a.first<b.first : a.second<b.second;
+        return a.first!=b.first ? a.first<b.first : a.second>b.second;
     }
   };
   typedef std::multimap<std::pair<int, Real>, Node*, Cmp> node_map_type;
@@ -664,6 +664,9 @@ void C0Polyhedron::retriangulate()
         std::cout << "Neighbors post this choice " << local_tet_quality_of(jminus, 0) << " " << local_tet_quality_of(jplus, 0) << std::endl;
 
         auto num_bad_neigh_best = (local_tet_quality[jminus] <= 0) + (local_tet_quality[jplus] <= 0);
+        // Does not matter if it's bad
+        if (local_tet_quality[jbest] == -1e6)
+          num_bad_neigh_best = 0;
 
         // Count the number of valid surrounding nodes
         unsigned int n_valid_surrounding = 0;
@@ -713,8 +716,8 @@ void C0Polyhedron::retriangulate()
             // Avoid chosing a tet that when constructed would leave both neighbors in bad shape
             // TODO: simply pre-compute that for every vertex and exclude those nodes
             // TODO: It does not matter if we are down to 4 surrounding (?)
-            if (local_tet_quality_of(jminus, /*without*/j) <= 0 &&
-                local_tet_quality_of(jplus, /*without*/j) <= 0)
+            if ((n_valid_surrounding > 3) && local_tet_quality_of(jminus, /*without*/j) <= 0 &&
+                                             local_tet_quality_of(jplus, /*without*/j) <= 0)
               continue;
 
             // The more neighbors we fix the better
