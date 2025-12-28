@@ -828,7 +828,7 @@ void C0Polyhedron::retriangulate()
             {
               libmesh_ignore(t);
               std::cout << "Going down to 3 surrounding: " << t << std::endl;
-              
+
               auto [jbest, jminus, jplus] = find_new_tet_nodes();
 
               // If all zero volume, skip, we have covered all we need for this node
@@ -1021,15 +1021,18 @@ void C0Polyhedron::retriangulate()
       // Recompute the valence and angles of the nodes we used
       // The idea is that if one node is being isolated on one side,
       // we need to treat it asap
-      Node * & node_j2 = surrounding_nodes[j2];
-      nodes_by_geometry.erase(node_index[node_j2]);
-      node_index[node_j2] = nodes_by_geometry.emplace(geometry_at(*node_j2), node_j2);
-      Node * & node_j1 = surrounding_nodes[j1];
-      nodes_by_geometry.erase(node_index[node_j1]);
-      node_index[node_j1] = nodes_by_geometry.emplace(geometry_at(*node_j1), node_j1);
-      Node * & node_j3 = surrounding_nodes[j3];
-      nodes_by_geometry.erase(node_index[node_j3]);
-      node_index[node_j3] = nodes_by_geometry.emplace(geometry_at(*node_j3), node_j3);
+      if (nodes_by_geometry.size() > 4)
+      {
+        Node * & node_j2 = surrounding_nodes[j2];
+        nodes_by_geometry.erase(node_index[node_j2]);
+        node_index[node_j2] = nodes_by_geometry.emplace(geometry_at(*node_j2), node_j2);
+        Node * & node_j1 = surrounding_nodes[j1];
+        nodes_by_geometry.erase(node_index[node_j1]);
+        node_index[node_j1] = nodes_by_geometry.emplace(geometry_at(*node_j1), node_j1);
+        Node * & node_j3 = surrounding_nodes[j3];
+        nodes_by_geometry.erase(node_index[node_j3]);
+        node_index[node_j3] = nodes_by_geometry.emplace(geometry_at(*node_j3), node_j3);
+      }
 
       // We should have used up all our surrounding nodes now, and we
       // shouldn't have messed up our surface in the process, and our
