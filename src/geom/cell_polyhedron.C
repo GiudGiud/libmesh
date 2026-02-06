@@ -677,10 +677,10 @@ std::array<Point, 4> Polyhedron::master_subelement (unsigned int i) const
 
   const auto & tet = this->_triangulation[i];
 
-  return { this->master_point(tet[0]),
-           this->master_point(tet[1]),
-           this->master_point(tet[2]),
-           this->master_point(tet[3]) };
+  return { tet[0] >= 0 ? this->master_point(tet[0]) : this->vertex_average(),
+           tet[1] >= 0 ? this->master_point(tet[1]) : this->vertex_average(),
+           tet[2] >= 0 ? this->master_point(tet[2]) : this->vertex_average(),
+           tet[3] >= 0 ? this->master_point(tet[3]) : this->vertex_average() };
 }
 
 
