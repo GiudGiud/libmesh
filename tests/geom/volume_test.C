@@ -1125,6 +1125,13 @@ protected:
       CPPUNIT_ASSERT_LESSEQUAL(sov, 3); // 3 <= sov
 
     CPPUNIT_ASSERT(!elem->is_flipped());
+
+    // Check routine for subtet side to poly side mapping
+    const auto subtet0_sides_to_poly_sides = elem->subelement_sides_to_poly_sides(0);
+    CPPUNIT_ASSERT_EQUAL(subtet0_sides_to_poly_sides[0], 0);
+    CPPUNIT_ASSERT_EQUAL(subtet0_sides_to_poly_sides[1], 0);
+    CPPUNIT_ASSERT_EQUAL(subtet0_sides_to_poly_sides[2], 0);
+    CPPUNIT_ASSERT_EQUAL(subtet0_sides_to_poly_sides[3], 0);
   }
 
 
