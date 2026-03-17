@@ -81,9 +81,12 @@ std::unique_ptr<Elem> C0Polyhedron::disconnected_clone() const
 
 bool C0Polyhedron::is_vertex(const unsigned int libmesh_dbg_var(i)) const
 {
-  libmesh_assert (i < this->n_nodes());
+  libmesh_assert_less (i, this->n_nodes() + _has_mid_elem_node);
 
-  return true;
+  if (i < this->n_nodes())
+    return true;
+  else
+    return false;
 }
 
 
