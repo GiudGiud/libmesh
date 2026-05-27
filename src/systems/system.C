@@ -376,6 +376,15 @@ void System::restrict_vectors ()
   parallel_object_only();
 
 #ifdef LIBMESH_ENABLE_AMR
+  // Build the list of non-SCALAR variable numbers; SCALAR variables
+  // are not associated with mesh elements and so should not be
+  // projected during AMR restriction.
+  std::vector<unsigned int> non_scalar_vars;
+  non_scalar_vars.reserve(this->n_vars());
+  for (auto var : make_range(this->n_vars()))
+    if (this->variable(var).type().family != SCALAR)
+      non_scalar_vars.push_back(var);
+
   // Restrict the _vectors on the coarsened cells
   for (auto & [vec_name, vec] : _vectors)
     {
@@ -383,7 +392,8 @@ void System::restrict_vectors ()
 
       if (_vector_projections[vec_name])
         {
-          this->project_vector (*v, this->vector_is_adjoint(vec_name));
+          this->project_vector (*v, this->vector_is_adjoint(vec_name),
+                                std::nullopt, non_scalar_vars);
         }
       else
         {
@@ -408,7 +418,8 @@ void System::restrict_vectors ()
 
   // Restrict the solution on the coarsened cells
   if (_solution_projection)
-    this->project_vector (*solution);
+    this->project_vector (*solution, /*is_adjoint=*/-1,
+                          std::nullopt, non_scalar_vars);
   // Or at least make sure the solution vector is the correct size
   else
     solution->init (this->n_dofs(), this->n_local_dofs(), true, PARALLEL);
