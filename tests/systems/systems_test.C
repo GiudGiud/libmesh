@@ -488,6 +488,8 @@ public:
 #endif
 
 #ifdef LIBMESH_ENABLE_AMR
+  CPPUNIT_TEST( testRestrictVectorsPreservesScalarDofs );
+
 #ifdef LIBMESH_HAVE_METAPHYSICL
 #ifdef LIBMESH_HAVE_PETSC
   CPPUNIT_TEST( testProjectMatrixEdge2 );
@@ -1475,6 +1477,75 @@ public:
   }
 
 #ifdef LIBMESH_ENABLE_AMR
+  void testRestrictVectorsPreservesScalarDofs()
+  {
+    LOG_UNIT_TEST;
+
+    // Build a simple 1D mesh and a system with a LAGRANGE variable
+    // and a SCALAR variable. After mesh refinement (which triggers
+    // System::restrict_vectors via EquationSystems::reinit), the
+    // SCALAR dof values must be preserved, since project_vector now
+    // skips SCALAR variables.
+    Mesh mesh(*TestCommWorld);
+
+    EquationSystems es(mesh);
+    ExplicitSystem & sys = es.add_system<ExplicitSystem> ("ScalarPreserve");
+
+    sys.add_variable("u", FIRST, LAGRANGE);
+    const unsigned int s_var = sys.add_variable("s", FIRST, SCALAR);
+
+    // Add a secondary projected vector to exercise the per-vector
+    // path in restrict_vectors as well as the *solution path.
+    NumericVector<Number> & extra = sys.add_vector("extra");
+
+    MeshTools::Generation::build_line (mesh, 4, 0., 1., EDGE2);
+
+    es.init();
+
+    // SCALAR dofs live on the last processor only.
+    const bool owns_scalars =
+      (TestCommWorld->rank() == TestCommWorld->size() - 1);
+
+    const Number s_value      = Number(42);
+    const Number extra_value  = Number(-17);
+
+    std::vector<dof_id_type> s_indices;
+    if (owns_scalars)
+      {
+        sys.get_dof_map().SCALAR_dof_indices(s_indices, s_var);
+        CPPUNIT_ASSERT(!s_indices.empty());
+        for (auto i : s_indices)
+          {
+            sys.solution->set(i, s_value);
+            extra.set(i, extra_value);
+          }
+      }
+    sys.solution->close();
+    extra.close();
+
+    // Refine every element; this triggers prolong_vectors, which
+    // forwards to restrict_vectors.
+    for (auto & elem : mesh.element_ptr_range())
+      elem->set_refinement_flag(Elem::REFINE);
+    es.reinit();
+
+    // After reinit the dof numbering may have changed, so look up
+    // the new SCALAR indices.
+    if (owns_scalars)
+      {
+        std::vector<dof_id_type> new_s_indices;
+        sys.get_dof_map().SCALAR_dof_indices(new_s_indices, s_var);
+        CPPUNIT_ASSERT_EQUAL(s_indices.size(), new_s_indices.size());
+        for (auto i : new_s_indices)
+          {
+            LIBMESH_ASSERT_NUMBERS_EQUAL((*sys.solution)(i), s_value,
+                                         TOLERANCE*TOLERANCE);
+            LIBMESH_ASSERT_NUMBERS_EQUAL(extra(i), extra_value,
+                                         TOLERANCE*TOLERANCE);
+          }
+      }
+  }
+
 #ifdef LIBMESH_HAVE_METAPHYSICL
 #ifdef LIBMESH_HAVE_PETSC
   void testProjectMatrix1D(const ElemType elem_type)
