@@ -378,12 +378,54 @@ void System::restrict_vectors ()
 #ifdef LIBMESH_ENABLE_AMR
   // Build the list of non-SCALAR variable numbers; SCALAR variables
   // are not associated with mesh elements and so should not be
-  // projected during AMR restriction.
-  std::vector<unsigned int> non_scalar_vars;
+  // projected during AMR restriction. Their dof values are preserved
+  // manually below by mapping old SCALAR indices to new ones.
+  std::vector<unsigned int> non_scalar_vars, scalar_vars;
   non_scalar_vars.reserve(this->n_vars());
   for (auto var : make_range(this->n_vars()))
-    if (this->variable(var).type().family != SCALAR)
-      non_scalar_vars.push_back(var);
+    {
+      if (this->variable(var).type().family == SCALAR)
+        scalar_vars.push_back(var);
+      else
+        non_scalar_vars.push_back(var);
+    }
+
+  // SCALAR dofs live on the last processor only
+  const bool owns_scalars =
+    !scalar_vars.empty() &&
+    (this->processor_id() == (this->n_processors()-1));
+
+  // Save SCALAR dof values (indexed by the old dof numbering) so we
+  // can re-write them at their new indices after project_vector.
+  auto save_scalars = [&](const NumericVector<Number> & v)
+    {
+      std::vector<Number> saved;
+      if (!owns_scalars)
+        return saved;
+      for (auto var : scalar_vars)
+        {
+          std::vector<dof_id_type> idx;
+          _dof_map->SCALAR_dof_indices(idx, var, /*old=*/true);
+          for (auto i : idx)
+            saved.push_back(v(i));
+        }
+      return saved;
+    };
+
+  auto restore_scalars = [&](NumericVector<Number> & v,
+                             const std::vector<Number> & saved)
+    {
+      if (!owns_scalars)
+        return;
+      std::size_t k = 0;
+      for (auto var : scalar_vars)
+        {
+          std::vector<dof_id_type> idx;
+          _dof_map->SCALAR_dof_indices(idx, var, /*old=*/false);
+          for (auto i : idx)
+            v.set(i, saved[k++]);
+        }
+    };
 
   // Restrict the _vectors on the coarsened cells
   for (auto & [vec_name, vec] : _vectors)
@@ -392,8 +434,12 @@ void System::restrict_vectors ()
 
       if (_vector_projections[vec_name])
         {
+          auto saved = save_scalars(*v);
           this->project_vector (*v, this->vector_is_adjoint(vec_name),
                                 std::nullopt, non_scalar_vars);
+          restore_scalars(*v, saved);
+          if (!scalar_vars.empty())
+            v->close();
         }
       else
         {
@@ -418,8 +464,14 @@ void System::restrict_vectors ()
 
   // Restrict the solution on the coarsened cells
   if (_solution_projection)
-    this->project_vector (*solution, /*is_adjoint=*/-1,
-                          std::nullopt, non_scalar_vars);
+    {
+      auto saved = save_scalars(*solution);
+      this->project_vector (*solution, /*is_adjoint=*/-1,
+                            std::nullopt, non_scalar_vars);
+      restore_scalars(*solution, saved);
+      if (!scalar_vars.empty())
+        solution->close();
+    }
   // Or at least make sure the solution vector is the correct size
   else
     solution->init (this->n_dofs(), this->n_local_dofs(), true, PARALLEL);
