@@ -56,6 +56,7 @@ public:
   // class's DEBUG-only convexity check rejects, so we only exercise the
   // (optimized-mode) tetrahedralization robustness in non-debug builds.
   CPPUNIT_TEST( testC0PolyhedronNonPlanarFallback );
+  CPPUNIT_TEST( testC0PolyhedronGreedyBailNoCrash );
 #endif
   CPPUNIT_TEST_SUITE_END();
 
@@ -1334,6 +1335,49 @@ protected:
     // The signed volume sum stays correct (and positive) even though the
     // fallback triangulation contains a tiny inverted sliver.
     CPPUNIT_ASSERT(poly->volume() > 0.0);
+  }
+
+  // A polyhedral cell (from the same real mesh) whose greedy,
+  // no-interior-node tetrahedralization heuristic drives its working
+  // surface triangulation into a non-manifold / stale-element state.
+  // The pointer dereferences there used to be guarded only by
+  // libmesh_assert (compiled out in optimized mode), so this element
+  // segfaulted in opt.  Those checks now throw a catchable error, so the
+  // constructor falls back to the mid-element-node tetrahedralization and
+  // the element is built without crashing.
+  void testC0PolyhedronGreedyBailNoCrash()
+  {
+    LOG_UNIT_TEST;
+
+    ReplicatedMesh mesh(*TestCommWorld);
+
+    const std::vector<Point> c5340_pts = {
+      Point(-1.01878381, -0.0250365604, -0.169932783), Point(-1.0155834, -0.0237886142, -0.168835983), Point(-1.01224422, -0.0220764242, -0.172498122),
+      Point(-1.01396203, -0.0250903778, -0.176656887), Point(-1.01562142, -0.0281972699, -0.176001713), Point(-1.00909352, -0.0256044529, -0.178981975),
+      Point(-1.00741684, -0.0309030805, -0.178443), Point(-1.00967777, -0.0325144939, -0.176001832), Point(-1.00967813, -0.0325142853, -0.163863778),
+      Point(-1.0086354, -0.0298359971, -0.164286211), Point(-1.01350462, -0.026311731, -0.16420044), Point(-1.01562166, -0.028197011, -0.163863659),
+      Point(-1.00550485, -0.0283179805, -0.174301654), Point(-1.0057224, -0.0312056001, -0.168961883), Point(-1.00569451, -0.0345443524, -0.169932678),
+      Point(-1.00719666, -0.0230278336, -0.17504555)
+    };
+    const std::vector<std::vector<unsigned int>> c5340_faces = {
+      {0, 1, 2, 3, 4},
+      {4, 3, 5, 6, 7},
+      {8, 9, 10, 11},
+      {11, 10, 1, 0},
+      {7, 6, 12, 13, 14},
+      {14, 13, 9, 8},
+      {15, 2, 1, 10, 9, 13, 12},
+      {12, 6, 5, 15},
+      {5, 3, 2, 15},
+      {4, 7, 14, 8, 11, 0}
+    };
+
+    const auto poly = dynamic_cast<C0Polyhedron *>
+      (buildPolyhedronFromFaces(c5340_pts, c5340_faces, mesh));
+    CPPUNIT_ASSERT(poly);
+    CPPUNIT_ASSERT_EQUAL(C0POLYHEDRON, poly->type());
+    CPPUNIT_ASSERT_EQUAL(10u, poly->n_sides());
+    CPPUNIT_ASSERT_EQUAL(16u, poly->n_vertices());
   }
 #endif // !DEBUG
 

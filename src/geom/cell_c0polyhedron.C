@@ -501,18 +501,42 @@ void C0Polyhedron::retriangulate()
 
       std::vector<Node *> surrounding_nodes(n_surrounding);
 
-      Elem * elem = surface.elem_ptr(*elems_by_node.begin());
+      // Use query_elem_ptr() so a stale id (from inconsistent
+      // node-to-element bookkeeping) yields nullptr rather than a
+      // dangling pointer we would dereference.
+      Elem * elem = surface.query_elem_ptr(*elems_by_node.begin());
       for (auto i : make_range(n_surrounding))
         {
+          // A missing element, or one that no longer touches this node,
+          // means our working surface triangulation is inconsistent.
+          // Throw (rather than rely on the asserts below, which are
+          // compiled out in opt mode and would leave us dereferencing a
+          // dangling or wrong element) so the caller falls back to the
+          // robust mid-element-node tetrahedralization.
+          libmesh_error_msg_if
+            (!elem, "C0Polyhedron optimal tetrahedralization reached an "
+                    "inconsistent surface");
           const unsigned int n = elem->get_node_index(&node);
-          libmesh_assert_not_equal_to(n, invalid_uint);
+          libmesh_error_msg_if
+            (n == invalid_uint,
+             "C0Polyhedron optimal tetrahedralization reached an "
+             "inconsistent surface");
           Node * next_node = elem->node_ptr((n+1)%3);
           surrounding_nodes[i] = next_node;
           if (surrounding_elems)
             (*surrounding_elems)[i] = elem;
-          elem = elem->neighbor_ptr((n+2)%3);
-          libmesh_assert(elem);
-          libmesh_assert_equal_to(elem, surface.elem_ptr(elem->id()));
+          // A null neighbor means our working surface triangulation is
+          // no longer a closed manifold; throw so we fall back.
+          Elem * neigh = elem->neighbor_ptr((n+2)%3);
+          libmesh_error_msg_if
+            (!neigh, "C0Polyhedron optimal tetrahedralization reached a "
+                     "non-manifold surface");
+          // Guard against following a link to a stale element.
+          libmesh_error_msg_if
+            (neigh != surface.query_elem_ptr(neigh->id()),
+             "C0Polyhedron optimal tetrahedralization reached an "
+             "inconsistent surface");
+          elem = neigh;
 
           // We should have a manifold here, but verifying that is
           // expensive
@@ -773,6 +797,14 @@ void C0Polyhedron::retriangulate()
 
               Elem * neigh10 = oldtri1->neighbor_ptr(c1);
               Elem * neigh12 = oldtri2->neighbor_ptr((c2+2)%3);
+              // Null neighbors indicate the greedy triangulation reached
+              // a non-manifold state; throw so we fall back to the robust
+              // tetrahedralization rather than dereferencing null (which
+              // only asserts in dbg, but segfaults in opt).
+              libmesh_error_msg_if
+                (!neigh10 || !neigh12,
+                 "C0Polyhedron optimal tetrahedralization reached a "
+                 "non-manifold surface");
               newtri1->set_neighbor(0, neigh10);
               neigh10->set_neighbor(neigh10->which_neighbor_am_i(oldtri1), newtri1);
               newtri1->set_neighbor(1, newtri2);
@@ -785,6 +817,10 @@ void C0Polyhedron::retriangulate()
 
               Elem * neigh21 = oldtri1->neighbor_ptr((c1+1)%3);
               Elem * neigh22 = oldtri2->neighbor_ptr((c2+1)%3);
+              libmesh_error_msg_if
+                (!neigh21 || !neigh22,
+                 "C0Polyhedron optimal tetrahedralization reached a "
+                 "non-manifold surface");
               newtri2->set_neighbor(0, newtri1);
               newtri2->set_neighbor(1, neigh21);
               neigh21->set_neighbor(neigh21->which_neighbor_am_i(oldtri1), newtri2);
@@ -855,12 +891,16 @@ void C0Polyhedron::retriangulate()
       newtri->set_node(1, n2);
       newtri->set_node(2, n3);
       Elem * neigh0 = oldtri1->neighbor_ptr((c1+1)%3);
+      Elem * neigh1 = oldtri2->neighbor_ptr((c2+1)%3);
+      Elem * neigh2 = oldtri3->neighbor_ptr((c3+1)%3);
+      libmesh_error_msg_if
+        (!neigh0 || !neigh1 || !neigh2,
+         "C0Polyhedron optimal tetrahedralization reached a "
+         "non-manifold surface");
       newtri->set_neighbor(0, neigh0);
       neigh0->set_neighbor(neigh0->which_neighbor_am_i(oldtri1), newtri);
-      Elem * neigh1 = oldtri2->neighbor_ptr((c2+1)%3);
       newtri->set_neighbor(1, neigh1);
       neigh1->set_neighbor(neigh1->which_neighbor_am_i(oldtri2), newtri);
-      Elem * neigh2 = oldtri3->neighbor_ptr((c3+1)%3);
       newtri->set_neighbor(2, neigh2);
       neigh2->set_neighbor(neigh2->which_neighbor_am_i(oldtri3), newtri);
 
