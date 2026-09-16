@@ -51,6 +51,12 @@ public:
   CPPUNIT_TEST( testC0PolygonHexagon );
   CPPUNIT_TEST( testC0PolyhedronCube );
   CPPUNIT_TEST( testC0PolyhedronHexagonalPrism );
+#ifndef DEBUG
+  // These polyhedra have non-planar faces, which the Polyhedron base
+  // class's DEBUG-only convexity check rejects, so we only exercise the
+  // (optimized-mode) tetrahedralization robustness in non-debug builds.
+  CPPUNIT_TEST( testC0PolyhedronNonPlanarFallback );
+#endif
   CPPUNIT_TEST_SUITE_END();
 
 public:
@@ -1262,6 +1268,74 @@ protected:
     CPPUNIT_ASSERT_EQUAL(libMesh::invalid_int, subtet0_sides_to_poly_sides[2]);
     CPPUNIT_ASSERT_EQUAL(libMesh::invalid_int, subtet0_sides_to_poly_sides[3]);
   }
+
+
+#ifndef DEBUG
+  // Build a C0Polyhedron from raw vertex coordinates and faces (given by
+  // local node numbers), mirroring what the mesh readers do.
+  Elem * buildPolyhedronFromFaces(const std::vector<Point> & pts,
+                                  const std::vector<std::vector<unsigned int>> & faces,
+                                  ReplicatedMesh & mesh)
+  {
+    for (auto i : index_range(pts))
+      mesh.add_point(pts[i], i);
+
+    std::vector<std::shared_ptr<Polygon>> sides(faces.size());
+    for (auto s : index_range(faces))
+      {
+        sides[s] = std::make_shared<C0Polygon>(faces[s].size());
+        for (auto i : index_range(faces[s]))
+          sides[s]->set_node(i, mesh.node_ptr(faces[s][i]));
+      }
+
+    return buildC0Polyhedron(sides, mesh);
+  }
+
+  // A polyhedral cell (extracted from a real polyhedral CFD mesh) with
+  // several non-planar faces.  Its mid-element-node fallback
+  // tetrahedralization necessarily contains a flat/inverted sub-tet:
+  // when a face is warped, no single interior apex lies on the inner
+  // side of every one of that face's sub-triangles.  This used to abort
+  // construction with "Creating flat tet"; the fallback now tolerates
+  // the sliver (keeping its signed volume) so the element can be built.
+  void testC0PolyhedronNonPlanarFallback()
+  {
+    LOG_UNIT_TEST;
+
+    ReplicatedMesh mesh(*TestCommWorld);
+
+    const std::vector<Point> c38_pts = {
+      Point(-0.00967213511, 0.0375213102, 0.11440216), Point(-0.00919682253, 0.0337367915, 0.113910273), Point(-0.0140832271, 0.0306561273, 0.114243895),
+      Point(-0.0181913264, 0.0343586169, 0.113910966), Point(-0.0168033894, 0.0375172831, 0.112722278), Point(-0.022073729, 0.0343717895, 0.117674939),
+      Point(-0.0225830954, 0.0368018039, 0.11745397), Point(-0.0202010367, 0.0343259946, 0.122786492), Point(-0.0196904354, 0.0375172421, 0.124340668),
+      Point(-0.0155176017, 0.0307893455, 0.123209432), Point(-0.0113911815, 0.0340037867, 0.125645041), Point(-0.0126021327, 0.0375213139, 0.126193732),
+      Point(-0.0071949535, 0.0336023606, 0.121997565), Point(-0.0068221204, 0.0368235856, 0.121370107), Point(-0.00823882595, 0.0294989012, 0.117792629),
+      Point(-0.0129022934, 0.0268406235, 0.118343696)
+    };
+    const std::vector<std::vector<unsigned int>> c38_faces = {
+      {0, 1, 2, 3, 4},
+      {4, 3, 5, 6},
+      {6, 5, 7, 8},
+      {8, 7, 9, 10, 11},
+      {11, 10, 12, 13},
+      {13, 12, 14, 1, 0},
+      {12, 10, 9, 15, 14},
+      {1, 14, 15, 2},
+      {3, 2, 15, 9, 7, 5},
+      {11, 13, 0, 4, 6, 8}
+    };
+
+    const auto poly = dynamic_cast<C0Polyhedron *>
+      (buildPolyhedronFromFaces(c38_pts, c38_faces, mesh));
+    CPPUNIT_ASSERT(poly);
+    CPPUNIT_ASSERT_EQUAL(C0POLYHEDRON, poly->type());
+    CPPUNIT_ASSERT_EQUAL(10u, poly->n_sides());
+    CPPUNIT_ASSERT_EQUAL(16u, poly->n_vertices());
+    // The signed volume sum stays correct (and positive) even though the
+    // fallback triangulation contains a tiny inverted sliver.
+    CPPUNIT_ASSERT(poly->volume() > 0.0);
+  }
+#endif // !DEBUG
 
 
 

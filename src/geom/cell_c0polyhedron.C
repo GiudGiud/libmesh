@@ -941,11 +941,16 @@ void C0Polyhedron::retriangulate()
         const auto & n2 = node_map[side->subtriangle(t)[1]];
         const auto & n3 = node_map[side->subtriangle(t)[2]];
 
-        // The mid node is the last node in the _nodes array
+        // The mid node is the last node in the _nodes array.  This is
+        // our last-resort tetrahedralization of a topologically valid
+        // element, so tolerate the slightly-inverted sub-tets that a
+        // non-planar face can produce (allow_flat).
         if (!inward_normal)
-          this->add_tet((int)n1, (int)n2, (int)n3, this->n_nodes() - 1);
+          this->add_tet((int)n1, (int)n2, (int)n3, this->n_nodes() - 1,
+                        /*allow_flat=*/true);
         else
-          this->add_tet((int)n1, (int)n3, (int)n2, this->n_nodes() - 1);
+          this->add_tet((int)n1, (int)n3, (int)n2, this->n_nodes() - 1,
+                        /*allow_flat=*/true);
       }
     }
   }
@@ -955,7 +960,8 @@ void C0Polyhedron::retriangulate()
 void C0Polyhedron::add_tet(int n1,
                            int n2,
                            int n3,
-                           int n4)
+                           int n4,
+                           bool allow_flat)
 {
 #ifndef NDEBUG
   const auto nn = this->n_nodes();
@@ -969,9 +975,27 @@ void C0Polyhedron::add_tet(int n1,
   const Point v13 = this->point(n3) - this->point(n1);
   const Point v14 = this->point(n4) - this->point(n1);
   const Real six_vol = triple_product(v12, v13, v14);
-  // We need to error on this in optimized modes to fall back onto the
-  // tetrahedralization with a mid node
-  libmesh_error_msg_if(six_vol <= 0, "Creating flat tet");
+
+  // In the optimal-heuristic tetrahedralization a flat or inverted tet
+  // means that heuristic has failed; we error (in optimized modes too)
+  // so the caller falls back onto the mid-element-node tetrahedralization.
+  //
+  // In that fallback itself (allow_flat) there is nowhere left to fall
+  // back to, and the element is topologically valid, so we keep the tet
+  // with its signed volume.  This happens when a polyhedron face is
+  // slightly non-planar: its sub-triangles are not coplanar, so the
+  // single interior mid-element node can lie just behind one of them.
+  // The negative sliver is correct in the signed volume sum, and the
+  // triangulation is only a helper (volume, quadrature, visualization),
+  // so a warning is more useful than refusing to build the element.
+  if (six_vol <= 0 && !allow_flat)
+    libmesh_error_msg("Creating flat tet");
+
+  if (six_vol <= 0)
+    libmesh_do_once
+      (libMesh::err << "Warning: C0Polyhedron with non-planar face(s); its "
+                       "mid-element-node tetrahedralization contains one or "
+                       "more flat/inverted sub-tets.\n");
 
   this->_triangulation.push_back({n1, n2, n3, n4});
 }

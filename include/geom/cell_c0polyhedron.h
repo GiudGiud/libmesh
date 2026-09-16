@@ -201,9 +201,19 @@ public:
 protected:
 
   /**
-   * Add to our triangulation (tetrahedralization).
+   * Add a tetrahedron to our triangulation (tetrahedralization).
+   *
+   * By default a non-positive-volume (flat or inverted) tet is an error;
+   * in the optimal-heuristic path this is what triggers the fallback to
+   * the mid-element-node tetrahedralization.  When \p allow_flat is true
+   * (the mid-element-node fallback, which is our last resort for a
+   * topologically valid element) such a tet is instead kept, with its
+   * signed volume preserved, and a one-time warning is emitted.  This
+   * lets us represent polyhedra whose faces are slightly non-planar, for
+   * which no single interior apex can give every face sub-triangle a
+   * positive-volume tet.
    */
-  void add_tet(int n1, int n2, int n3, int n4);
+  void add_tet(int n1, int n2, int n3, int n4, bool allow_flat = false);
 
 #ifdef LIBMESH_ENABLE_AMR
 
