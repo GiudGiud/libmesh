@@ -51,13 +51,8 @@ public:
   CPPUNIT_TEST( testC0PolygonHexagon );
   CPPUNIT_TEST( testC0PolyhedronCube );
   CPPUNIT_TEST( testC0PolyhedronHexagonalPrism );
-#ifndef DEBUG
-  // These polyhedra have non-planar faces, which the Polyhedron base
-  // class's DEBUG-only convexity check rejects, so we only exercise the
-  // (optimized-mode) tetrahedralization robustness in non-debug builds.
   CPPUNIT_TEST( testC0PolyhedronNonPlanarFallback );
   CPPUNIT_TEST( testC0PolyhedronGreedyBailNoCrash );
-#endif
   CPPUNIT_TEST_SUITE_END();
 
 public:
@@ -1271,7 +1266,6 @@ protected:
   }
 
 
-#ifndef DEBUG
   // Build a C0Polyhedron from raw vertex coordinates and faces (given by
   // local node numbers), mirroring what the mesh readers do.
   Elem * buildPolyhedronFromFaces(const std::vector<Point> & pts,
@@ -1379,7 +1373,6 @@ protected:
     CPPUNIT_ASSERT_EQUAL(10u, poly->n_sides());
     CPPUNIT_ASSERT_EQUAL(16u, poly->n_vertices());
   }
-#endif // !DEBUG
 
 
 

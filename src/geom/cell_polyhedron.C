@@ -107,50 +107,78 @@ Polyhedron::Polyhedron (const std::vector<std::shared_ptr<Polygon>> & sides,
 
     libmesh_assert_equal_to(nn, this->n_nodes());
 
-    // Figure out the orientation of our sides, now that we've got our
-    // nodes organized enough to find our center.  The algorithm below
-    // only works for convex polyhedra, but that's all we're
-    // supporting for now.
+    // Figure out the orientation of our sides and, while we have the
+    // face normals, check that the polyhedron looks convex.  Several
+    // Polyhedron methods and the tetrahedralization only really work for
+    // convex polyhedra.
     Point center;
     for (auto n : make_range(nn))
       center.add (this->point(n));
     center /= static_cast<Real>(nn);
 
+    // Only checked/warned once per run; the check itself is cheap.
+    bool warned_nonconvex = false;
+
     for (unsigned int s : index_range(sides))
       {
         const Polygon & side = *sides[s];
-        const Point x_i = side.point(0);
-        const Point n_i =
-          (side.point(1) - side.point(0)).cross
-          (side.point(0) - side.point(side.n_sides()-1)).unit();
+
+        // Use an area-weighted (Newell) face normal and the face centroid
+        // rather than a single corner triangle: for a face that is even
+        // slightly non-planar the corner-triangle normal is a poor
+        // estimate of the face's plane, which would give the wrong
+        // orientation and a spurious non-convexity report.  The signs
+        // match the previous corner-triangle normal (p1-p0) x (p0-p_last),
+        // which is the negative of the standard Newell normal, so that the
+        // stored orientation - and everything downstream calibrated to it
+        // - is unchanged for planar faces.
+        const unsigned int nv = side.n_sides();
+        Point n_i, face_center;
+        std::unordered_set<const Node *> face_nodes;
+        for (unsigned int v : make_range(nv))
+          {
+            const Point & p = side.point(v);
+            const Point & q = side.point((v+1) % nv);
+            n_i(0) -= (p(1) - q(1)) * (p(2) + q(2));
+            n_i(1) -= (p(2) - q(2)) * (p(0) + q(0));
+            n_i(2) -= (p(0) - q(0)) * (p(1) + q(1));
+            face_center.add(p);
+            face_nodes.insert(side.node_ptr(v));
+          }
+        n_i = n_i.unit();
+        face_center /= static_cast<Real>(nv);
 
         bool & inward_normal = std::get<1>(_sidelinks_data[s]);
-        inward_normal = (n_i * (center - x_i) > TOLERANCE);
-      }
+        inward_normal = (n_i * (center - face_center) > TOLERANCE);
 
-    // We're betting a lot on "our polyhedra are all convex", so let's
-    // check that if we have time.
-#ifdef DEBUG
-    for (unsigned int s : index_range(sides))
-      {
-        const Polygon & side = *sides[s];
-        const Point x_i = side.point(0);
-        const bool inward_normal = std::get<1>(this->_sidelinks_data[s]);
-
-        const Point n_i =
-          (side.point(1) - side.point(0)).cross
-          (side.point(0) - side.point(side.n_sides()-1)).unit() *
-          (inward_normal ? -1 : 1);
-
-        for (const Point & node : this->node_ref_range())
+        // Convexity check: every vertex that is not on this face should
+        // lie on its interior side.  A face's own vertices lie on the
+        // (possibly non-planar) face, so we skip them to avoid mistaking
+        // non-planarity for non-convexity.  This is a warning rather than
+        // an error: the tetrahedralization can still make an attempt, but
+        // its result (and other convexity-assuming methods) may be off.
+        if (!warned_nonconvex)
           {
-            const Point d_n = node - x_i;
-            if (d_n * n_i > TOLERANCE * d_n.norm())
-              libmesh_not_implemented_msg
-                ("Cannot create a non-convex polyhedron");
+            const Point outward_n = n_i * (inward_normal ? -1 : 1);
+            for (const auto n : this->node_index_range())
+              {
+                if (face_nodes.count(this->node_ptr(n)))
+                  continue;
+
+                const Point d_n = this->point(n) - face_center;
+                if (d_n * outward_n > TOLERANCE * d_n.norm())
+                  {
+                    libmesh_do_once
+                      (libMesh::err << "Warning: constructing a C0Polyhedron "
+                       "that appears to be non-convex; its tetrahedralization, "
+                       "volume, and other convexity-assuming methods may be "
+                       "unreliable.\n");
+                    warned_nonconvex = true;
+                    break;
+                  }
+              }
           }
       }
-#endif
 
     // Is this likely to ever be used?  We may do refinement with
     // polyhedra but it's probably not going to have a hierarchy...
